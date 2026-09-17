@@ -1,0 +1,20 @@
+{
+  "model": "example-openai-model",
+  "usage": {
+    "input_tokens": 1200,
+    "output_tokens": 430,
+    "input_tokens_details": {
+      "cached_tokens": 800
+    },
+    "total_tokens": 1630
+  },
+  "capacity": {
+    "windows": [
+      {
+        "label": "5h",
+        "used_percent": 45,
+        "reset_at": "2030-01-01T05:00:00Z"
+      }
+    ]
+  }
+}

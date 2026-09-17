@@ -1,0 +1,13 @@
+{
+  "model": "example-anthropic-model",
+  "usage": {
+    "input_tokens": 900,
+    "output_tokens": 260,
+    "cache_read_input_tokens": 400,
+    "cache_creation_input_tokens": 40
+  },
+  "interruption": {
+    "occurred": true,
+    "category": "rate_limit"
+  }
+}
