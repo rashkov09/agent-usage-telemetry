@@ -9,6 +9,8 @@ const QUALITY_RANK = new Map([
   [NOT_AVAILABLE, 0],
 ]);
 
+const TERMINAL_TASK_STATUSES = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
+
 function clone(value) {
   return structuredClone(value);
 }
@@ -100,6 +102,11 @@ export class LifecycleProjection {
     if (event.event_type === "LOGICAL_TASK") {
       const previous = this.tasks.get(data.task_id);
       if (previous) {
+        if (TERMINAL_TASK_STATUSES.has(previous.status) && (
+          data.status !== previous.status || data.completed_at !== previous.completed_at
+        )) {
+          throw new Error(`logical task ${data.task_id} terminal state cannot change`);
+        }
         for (const key of ["created_at", "started_at", "task_kind", "project", "revision"]) {
           if (previous[key] !== data[key] && previous[key] !== NOT_AVAILABLE && data[key] !== NOT_AVAILABLE) {
             throw new Error(`logical task ${data.task_id} conflicts on ${key}`);
