@@ -55,6 +55,12 @@ function isCount(value) {
   return Number.isInteger(value) && value >= 0;
 }
 
+function protectedMinimum(builtInMinimum, requestedMinimum) {
+  return Number.isInteger(requestedMinimum)
+    ? Math.max(builtInMinimum, requestedMinimum)
+    : builtInMinimum;
+}
+
 function strictTotal(records, key) {
   if (!records.length || records.some((record) => !isCount(record[key]))) return NOT_AVAILABLE;
   return records.reduce((total, record) => total + record[key], 0);
@@ -113,9 +119,23 @@ function matchingInterruptions(state, window, startTime, endTime) {
 function sampleFromInterval(state, window, start, end, delta) {
   const startedAt = Date.parse(start.observed_at);
   const endedAt = Date.parse(end.observed_at);
-  const providerSegments = state.segments.filter((segment) =>
-    segment.provider === window.provider && segment.ended_at !== NOT_AVAILABLE &&
-    Date.parse(segment.started_at) < endedAt && Date.parse(segment.ended_at) > startedAt);
+  const overlappingSegments = state.segments.filter((segment) => {
+    const segmentStartedAt = Date.parse(segment.started_at);
+    const segmentEndedAt = Date.parse(segment.ended_at);
+    return Number.isFinite(segmentStartedAt) && segmentStartedAt < endedAt &&
+      (segment.ended_at === NOT_AVAILABLE || (Number.isFinite(segmentEndedAt) && segmentEndedAt > startedAt));
+  });
+  const unresolvedSegments = overlappingSegments.filter((segment) =>
+    segment.ended_at === NOT_AVAILABLE || segment.provider === NOT_AVAILABLE);
+  if (unresolvedSegments.length) {
+    return unavailable("INCOMPATIBLE_WINDOWS", {
+      window_id: window.window_id,
+      start_observation_id: start.observation_id,
+      end_observation_id: end.observation_id,
+    });
+  }
+
+  const providerSegments = overlappingSegments.filter((segment) => segment.provider === window.provider);
   const crossing = providerSegments.filter((segment) =>
     Date.parse(segment.started_at) < startedAt || Date.parse(segment.ended_at) > endedAt);
   if (crossing.length) {
@@ -128,14 +148,16 @@ function sampleFromInterval(state, window, start, end, delta) {
 
   const segments = providerSegments.sort((left, right) =>
     left.started_at.localeCompare(right.started_at) || left.segment_id.localeCompare(right.segment_id));
-  const models = [...new Set(segments.map((segment) => segment.model).filter((model) => model !== NOT_AVAILABLE))].sort();
+  const models = [...new Set(segments.map((segment) => segment.model))].sort();
+  const hasUnknownModel = models.includes(NOT_AVAILABLE);
+  const knownModels = models.filter((model) => model !== NOT_AVAILABLE);
   const taskIds = [...new Set(segments.map((segment) => segment.task_id))].sort();
   const tasks = taskIds.map((taskId) => state.tasks.find((task) => task.task_id === taskId)).filter(Boolean);
   const taskClasses = [...new Set(tasks.map((task) => task.task_kind).filter((kind) => kind !== NOT_AVAILABLE))].sort();
   const tokenTotals = Object.fromEntries(TOKEN_FEATURES.map((key) => [key, strictTotal(segments, key)]));
   const hasAllTokenDimensions = TOKEN_FEATURES.every((key) => tokenTotals[key] !== NOT_AVAILABLE);
-  const singleModel = models.length === 1 ? models[0] : NOT_AVAILABLE;
-  const reason = models.length > 1 ? "MODEL_MIX_UNRESOLVED"
+  const singleModel = !hasUnknownModel && knownModels.length === 1 ? knownModels[0] : NOT_AVAILABLE;
+  const reason = hasUnknownModel || knownModels.length > 1 ? "MODEL_MIX_UNRESOLVED"
     : singleModel === NOT_AVAILABLE || !hasAllTokenDimensions ? "MISSING_TOKEN_DIMENSIONS"
       : NOT_AVAILABLE;
   const limitEvents = matchingInterruptions(state, window, startedAt, endedAt);
@@ -331,7 +353,7 @@ function trainingIdentity(samples, scope) {
 }
 
 export function trainCapacityEstimator(samples, scope, { minimumIndependentWindows = MINIMUM_INDEPENDENT_WINDOWS, generatedAt = NOT_AVAILABLE } = {}) {
-  const requiredWindows = Math.max(MINIMUM_INDEPENDENT_WINDOWS, minimumIndependentWindows);
+  const requiredWindows = protectedMinimum(MINIMUM_INDEPENDENT_WINDOWS, minimumIndependentWindows);
   const selected = eligibleSamples(samples, scope);
   const labeledScopeSamples = [...new Map(samples.map((sample) => [sample.sample_id, sample])).values()].filter((sample) =>
     sample.provider === scope.provider && sample.window_type === scope.window_type &&
@@ -403,6 +425,9 @@ export function estimateCapacity(artifact, request) {
   if (!artifact || artifact.availability !== "AVAILABLE") {
     return unavailable(artifact?.reason ?? "INSUFFICIENT_SAMPLES", { ...common, confidence: "LOW" });
   }
+  if (artifact.model_version !== CAPACITY_ESTIMATOR_VERSION) {
+    return unavailable("STALE_MODEL", { ...common, confidence: "LOW" });
+  }
   if (artifact.provider !== request.provider || artifact.model !== request.model || artifact.window_type !== request.window_type) {
     return unavailable("PROVIDER_MODEL_MISMATCH", { ...common, confidence: "LOW" });
   }
@@ -435,7 +460,7 @@ export function estimateCapacity(artifact, request) {
 }
 
 export function summarizeTaskClassCapacity(samples, scope, taskClass, { minimumIndependentWindows = 3 } = {}) {
-  const requiredWindows = Math.max(3, minimumIndependentWindows);
+  const requiredWindows = protectedMinimum(3, minimumIndependentWindows);
   const selected = eligibleSamples(samples, scope).filter((sample) =>
     sample.task_count === 1 && sample.task_class === taskClass);
   const windows = new Set(selected.map((sample) => sample.window_id));

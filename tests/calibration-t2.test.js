@@ -147,6 +147,53 @@ test("multi-model intervals preserve model mix and are unusable for a single-mod
   assert.equal(sample.unusable_reason, "MODEL_MIX_UNRESOLVED");
 });
 
+test("unknown-model work prevents single-model attribution", () => {
+  const knownAndUnknown = validIntervalEvents();
+  knownAndUnknown.splice(-1, 0, segmentEvent(
+    "segment-unknown", "calibration-task", "2030-01-01T02:00:00.000Z", "2030-01-01T02:15:00.000Z",
+    { model: NOT_AVAILABLE },
+  ));
+  const mixedSample = buildCalibrationDataset(buildLifecycleProjection(knownAndUnknown)).samples[0];
+  assert.equal(mixedSample.model, NOT_AVAILABLE);
+  assert.deepEqual(mixedSample.model_mix, [NOT_AVAILABLE, "model-a"]);
+  assert.equal(mixedSample.usable_for_single_model_estimator, false);
+  assert.equal(mixedSample.unusable_reason, "MODEL_MIX_UNRESOLVED");
+
+  const onlyUnknown = validIntervalEvents().map((event) =>
+    event.event_type === "EXECUTION_SEGMENT"
+      ? { ...event, data: { ...event.data, model: NOT_AVAILABLE } }
+      : event);
+  const unknownSample = buildCalibrationDataset(buildLifecycleProjection(onlyUnknown)).samples[0];
+  assert.equal(unknownSample.model, NOT_AVAILABLE);
+  assert.deepEqual(unknownSample.model_mix, [NOT_AVAILABLE]);
+  assert.equal(unknownSample.unusable_reason, "MODEL_MIX_UNRESOLVED");
+
+  const knownSample = buildCalibrationDataset(buildLifecycleProjection(validIntervalEvents())).samples[0];
+  assert.equal(knownSample.model, "model-a");
+  assert.deepEqual(knownSample.model_mix, ["model-a"]);
+  assert.equal(knownSample.usable_for_single_model_estimator, true);
+});
+
+test("open or provider-unattributed overlapping work rejects the interval", () => {
+  const openEvents = validIntervalEvents();
+  openEvents.splice(-1, 0, segmentEvent(
+    "segment-open", "calibration-task", "2030-01-01T02:00:00.000Z", NOT_AVAILABLE,
+    { input_tokens: 9_999_999, total_tokens: 10_000_005 },
+  ));
+  const openDataset = buildCalibrationDataset(buildLifecycleProjection(openEvents));
+  assert.equal(openDataset.samples.length, 0);
+  assert.equal(openDataset.rejections[0].reason, "INCOMPATIBLE_WINDOWS");
+
+  const unattributedEvents = validIntervalEvents();
+  unattributedEvents.splice(-1, 0, segmentEvent(
+    "segment-unattributed", "calibration-task", "2030-01-01T02:00:00.000Z", "2030-01-01T02:15:00.000Z",
+    { provider: NOT_AVAILABLE, input_tokens: 5_000_000, total_tokens: 5_000_006 },
+  ));
+  const unattributedDataset = buildCalibrationDataset(buildLifecycleProjection(unattributedEvents));
+  assert.equal(unattributedDataset.samples.length, 0);
+  assert.equal(unattributedDataset.rejections[0].reason, "INCOMPATIBLE_WINDOWS");
+});
+
 test("5h and weekly samples never train the same model", () => {
   const fiveHour = Array.from({ length: 8 }, (_, index) => trainingSample(index));
   const weekly = Array.from({ length: 8 }, (_, index) => trainingSample(index + 20, {
@@ -176,6 +223,16 @@ test("insufficient independent samples produce a machine-readable NOT_AVAILABLE 
   });
   assert.equal(attemptedBypass.availability, NOT_AVAILABLE);
   assert.equal(attemptedBypass.minimum_independent_windows, 8);
+});
+
+test("malformed estimator minimum overrides cannot weaken the eight-window floor", () => {
+  const samples = Array.from({ length: 3 }, (_, index) => trainingSample(index));
+  for (const malformed of [NaN, Infinity, "eight", {}, 7.5]) {
+    const artifact = trainCapacityEstimator(samples, scope, { minimumIndependentWindows: malformed });
+    assert.equal(artifact.availability, NOT_AVAILABLE);
+    assert.equal(artifact.reason, "INSUFFICIENT_SAMPLES");
+    assert.equal(artifact.minimum_independent_windows, 8);
+  }
 });
 
 test("estimates cannot masquerade as observations and confidence is deterministic", () => {
@@ -221,6 +278,18 @@ test("persisted estimator identity detects stale training data", () => {
   assert.equal(isEstimatorArtifactStale(artifact, [...samples, trainingSample(9)]), true);
 });
 
+test("prediction rejects a foreign estimator version without a caller digest", () => {
+  const samples = Array.from({ length: 8 }, (_, index) => trainingSample(index));
+  const artifact = { ...trainCapacityEstimator(samples, scope), model_version: "legacy-v0" };
+  const result = estimateCapacity(artifact, {
+    ...scope,
+    baseline_remaining_percent: 50,
+    workload: trainingSample(2),
+  });
+  assert.equal(result.availability, NOT_AVAILABLE);
+  assert.equal(result.reason, "STALE_MODEL");
+});
+
 test("task-class aggregation stays unavailable until independent evidence exists", () => {
   const insufficient = summarizeTaskClassCapacity([trainingSample(0), trainingSample(1)], scope, "review");
   assert.equal(insufficient.availability, NOT_AVAILABLE);
@@ -229,6 +298,17 @@ test("task-class aggregation stays unavailable until independent evidence exists
   assert.equal(available.availability, "AVAILABLE");
   assert.equal(available.source, "DERIVED");
   assert.equal(available.confidence, "LOW");
+});
+
+test("malformed task-class minimum overrides cannot weaken its three-window floor", () => {
+  const samples = [trainingSample(0), trainingSample(1)];
+  for (const malformed of [NaN, Infinity, "three", {}, 2.5]) {
+    const summary = summarizeTaskClassCapacity(samples, scope, "review", {
+      minimumIndependentWindows: malformed,
+    });
+    assert.equal(summary.availability, NOT_AVAILABLE);
+    assert.equal(summary.reason, "INSUFFICIENT_SAMPLES");
+  }
 });
 
 test("provider or model mismatch is rejected", () => {
