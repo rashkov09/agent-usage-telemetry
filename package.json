@@ -1,6 +1,6 @@
 {
   "name": "agent-usage-telemetry",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Track token usage, provider capacity, resets, and interruptions across AI coding agents.",
   "type": "module",
   "license": "MIT",

@@ -155,6 +155,33 @@ SQLite was considered for task/segment/window joins. T1 uses a deterministic in-
 
 `runCapacityEstimator(input, estimator)` is an interface for later empirical work. It supplies no coefficients or quota assumptions and forces every result to carry `quality: "ESTIMATED"`, an estimator ID, and confidence. Observed provider/client/runtime evidence outranks estimates and is never overwritten.
 
+T2 adds a conservative built-in calibration path without changing that T1 compatibility seam:
+
+- `deriveCapacityDelta(start, end)` accepts only two chronologically ordered, non-estimated observations with the same provider, window type, window ID, reset timestamp, source, and quality. Both remaining percentages must be present, the interval must end no later than the reset, and remaining capacity may not increase. Otherwise the result is `NOT_AVAILABLE`.
+- `buildCalibrationDataset(projection)` converts adjacent compatible observations into rebuildable samples. Endpoint percentages are `OBSERVED`; their difference is `DERIVED`. It preserves input, output, cache-read, and cache-write tokens as four separate fields, records active execution independently, rejects segments crossing interval boundaries, preserves a sorted model mix, and marks mixed-model samples unusable for a single-model estimator.
+- Capacity-limit events are retained as `OBSERVED` anchors. An anchor does **not** imply that accumulated tokens equal 100% of provider quota; `quota_exhaustion_percent` remains `NOT_AVAILABLE` unless separately observed.
+- 5-hour, weekly, and any future window types are independent estimator scopes. Provider and model must also match exactly.
+
+`trainCapacityEstimator(samples, scope)` uses deterministic non-negative linear coordinate descent over the four separate token features. Active execution duration is added only when every selected sample supplies it. There are no provider-specific token weights or quota constants. Training requires at least **8 independent capacity windows**; fewer windows return `NOT_AVAILABLE / INSUFFICIENT_SAMPLES`. Model-mix and missing-dimension evidence is never silently coerced into training data.
+
+Evaluation is deterministic leave-one-window-out validation. The artifact reports mean, median, and maximum absolute percentage-point error and the held-out sample count. Confidence means:
+
+- `LOW`: an available model that does not meet the stronger thresholds below, including every 8–11-window model;
+- `MEDIUM`: at least 12 independent windows and validation MAE at most 10 percentage points;
+- `HIGH`: at least 25 independent windows, MAE at most 5 percentage points, and maximum held-out error at most 15 percentage points.
+
+An out-of-training-range workload is downgraded to `LOW`. Estimates are rounded to whole percentage points. `estimateCapacity(...)` returns the current observed percentage separately from the estimated percentage; it never overwrites or relabels observed evidence. A baseline observed remaining percentage is required to turn predicted consumption into predicted remaining capacity.
+
+`summarizeTaskClassCapacity(...)` aggregates only single-task, single-class compatible intervals. It requires at least three independent windows and returns a median and observed range, not an orchestration decision. Task classes are sanitized lifecycle values supplied by callers; this package contains no project issue names.
+
+Fitted parameters are not persisted by this package. An artifact nevertheless carries its model version, exact provider/model/window scope, sample counts, validation metrics, and a SHA-256 training-data digest. `isEstimatorArtifactStale(...)` detects version or training-evidence drift. Rebuilding from the same append-only evidence produces the same dataset and model result.
+
+Use `agent-usage-telemetry calibration-summary --input <lifecycle.jsonl>` for a human summary. Its lines explicitly label `OBSERVED`, `DERIVED`, `ESTIMATED`, and `NOT_AVAILABLE` evidence.
+
+Machine-readable unavailability reasons are a small stable set: `INSUFFICIENT_SAMPLES`, `INCOMPATIBLE_WINDOWS`, `MISSING_TOKEN_DIMENSIONS`, `MODEL_MIX_UNRESOLVED`, `NO_CAPACITY_LABELS`, `PROVIDER_MODEL_MISMATCH`, `MISSING_BASELINE_OBSERVATION`, and `STALE_MODEL`.
+
+Useful future calibration requires a capacity observation at task/interval start and end, stable window/reset identity, separate token counters for every resumed segment, and a categorized capacity-limit timestamp. Session-wide changes must not be attributed to a task when those interval facts are absent.
+
 The fixtures under `tests/fixtures/` are synthetic and sanitized. They preserve the shapes of a multi-segment implementation interrupted by capacity and an exact-SHA review interrupted by both capacity and no-progress detection; they contain no production records, prompts, account identifiers, local paths, or private source.
 
 ## Add another provider

@@ -45,3 +45,17 @@ test("CLI reports a logical-task lifecycle without changing legacy commands", ()
   assert.equal(summary.segment_ids.length, 2);
   assert.equal(summary.total_lead_seconds, 11400);
 });
+
+test("CLI calibration summary labels observed, derived, estimated, and unavailable evidence", () => {
+  const fixture = new URL("./fixtures/gin-164-shaped.jsonl", import.meta.url);
+  const result = spawnSync(process.execPath, ["cli.js", "calibration-summary", "--input", fixture.pathname], {
+    cwd: new URL("..", import.meta.url),
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /CAPACITY CALIBRATION SUMMARY/);
+  assert.match(result.stdout, /OBSERVED/);
+  assert.match(result.stdout, /DERIVED/);
+  assert.match(result.stdout, /ESTIMATED/);
+  assert.match(result.stdout, /NOT_AVAILABLE/);
+});
