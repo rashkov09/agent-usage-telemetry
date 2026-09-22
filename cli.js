@@ -5,6 +5,7 @@ import { normalizeObservation } from "./core/telemetry.js";
 import { renderSummary } from "./core/summary.js";
 import { buildLifecycleProjection } from "./core/lifecycle.js";
 import { readLifecycleEvents } from "./storage/lifecycle-jsonl.js";
+import { renderCalibrationSummary } from "./core/calibration.js";
 
 function help() {
   return `agent-usage-telemetry
@@ -13,6 +14,7 @@ Usage:
   agent-usage-telemetry ingest --provider <openai|anthropic> --input <file|-> [--output <file>]
   agent-usage-telemetry summary [--input <jsonl>] [--last <count>]
   agent-usage-telemetry lifecycle-summary --input <jsonl> [--task <task-id>]
+  agent-usage-telemetry calibration-summary --input <jsonl>
 
 Defaults:
   ingest --output ./agent-usage.jsonl
@@ -65,6 +67,12 @@ export function run(argv) {
     const result = options.task ? projection.taskSummary(options.task) : projection.report();
     if (!result) throw new Error(`unknown logical task: ${options.task}`);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  if (command === "calibration-summary") {
+    if (!options.input) throw new Error("calibration-summary requires --input");
+    const projection = buildLifecycleProjection(readLifecycleEvents(options.input));
+    process.stdout.write(`${renderCalibrationSummary(projection)}\n`);
     return;
   }
   throw new Error(`unknown command: ${command}`);

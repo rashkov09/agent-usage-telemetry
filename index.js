@@ -19,5 +19,18 @@ export {
   deriveTaskTiming,
   selectBestCapacityObservation,
 } from "./core/lifecycle.js";
-export { buildCalibrationInput, runCapacityEstimator } from "./core/calibration.js";
+export {
+  CALIBRATION_REASONS,
+  CAPACITY_ESTIMATOR_VERSION,
+  MINIMUM_INDEPENDENT_WINDOWS,
+  buildCalibrationDataset,
+  buildCalibrationInput,
+  deriveCapacityDelta,
+  estimateCapacity,
+  isEstimatorArtifactStale,
+  renderCalibrationSummary,
+  runCapacityEstimator,
+  summarizeTaskClassCapacity,
+  trainCapacityEstimator,
+} from "./core/calibration.js";
 export { LifecycleStore, appendLifecycleEvent, readLifecycleEvents } from "./storage/lifecycle-jsonl.js";
