@@ -1,6 +1,6 @@
 {
   "name": "agent-usage-telemetry",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Track token usage, provider capacity, resets, and interruptions across AI coding agents.",
   "type": "module",
   "license": "MIT",
@@ -14,7 +14,9 @@
     ".": "./index.js",
     "./providers/openai": "./providers/openai.js",
     "./providers/anthropic": "./providers/anthropic.js",
-    "./storage/jsonl": "./storage/jsonl.js"
+    "./storage/jsonl": "./storage/jsonl.js",
+    "./lifecycle": "./core/lifecycle.js",
+    "./storage/lifecycle-jsonl": "./storage/lifecycle-jsonl.js"
   },
   "files": [
     "cli.js",

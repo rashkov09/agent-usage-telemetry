@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent usage telemetry lifecycle evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["lifecycle_event_version", "event_id", "event_type", "recorded_at", "data"],
+  "properties": {
+    "lifecycle_event_version": { "const": 1 },
+    "event_id": { "$ref": "#/$defs/id" },
+    "event_type": {
+      "enum": ["LOGICAL_TASK", "EXECUTION_SEGMENT", "INTERRUPTION", "CAPACITY_OBSERVATION", "CAPACITY_WINDOW"]
+    },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "data": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "event_type": { "const": "LOGICAL_TASK" } } },
+      "then": { "properties": { "data": { "$ref": "#/$defs/task" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "EXECUTION_SEGMENT" } } },
+      "then": { "properties": { "data": { "$ref": "#/$defs/segment" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "INTERRUPTION" } } },
+      "then": { "properties": { "data": { "$ref": "#/$defs/interruption" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "CAPACITY_OBSERVATION" } } },
+      "then": { "properties": { "data": { "$ref": "#/$defs/observation" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "CAPACITY_WINDOW" } } },
+      "then": { "properties": { "data": { "$ref": "#/$defs/window" } } }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{0,199}$" },
+    "unavailable": { "const": "NOT_AVAILABLE" },
+    "optionalId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "$ref": "#/$defs/unavailable" }] },
+    "text": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\r\\n\\u0000]+$" },
+    "optionalText": { "oneOf": [{ "$ref": "#/$defs/text" }, { "$ref": "#/$defs/unavailable" }] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "optionalTimestamp": { "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "$ref": "#/$defs/unavailable" }] },
+    "count": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "$ref": "#/$defs/unavailable" }] },
+    "percentage": { "oneOf": [{ "type": "number", "minimum": 0, "maximum": 100 }, { "$ref": "#/$defs/unavailable" }] },
+    "quality": {
+      "enum": ["PROVIDER_REPORTED", "PROVIDER_CLIENT_REPORTED", "RUNTIME_REPORTED", "ESTIMATED", "NOT_AVAILABLE"]
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "created_at", "started_at", "completed_at", "status", "task_kind", "project", "revision"],
+      "properties": {
+        "task_id": { "$ref": "#/$defs/id" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "started_at": { "$ref": "#/$defs/optionalTimestamp" },
+        "completed_at": { "$ref": "#/$defs/optionalTimestamp" },
+        "status": { "enum": ["PLANNED", "IN_PROGRESS", "BLOCKED", "WAITING", "COMPLETED", "FAILED", "CANCELLED"] },
+        "task_kind": { "$ref": "#/$defs/optionalText" },
+        "project": { "$ref": "#/$defs/optionalId" },
+        "revision": { "oneOf": [{ "type": "string", "pattern": "^[0-9a-f]{40}$" }, { "$ref": "#/$defs/unavailable" }] }
+      }
+    },
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["segment_id", "task_id", "run_id", "session_id", "agent", "provider", "model", "started_at", "ended_at", "outcome", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens", "total_tokens_source", "usage_scope", "usage_quality"],
+      "properties": {
+        "segment_id": { "$ref": "#/$defs/id" }, "task_id": { "$ref": "#/$defs/id" },
+        "run_id": { "$ref": "#/$defs/optionalId" }, "session_id": { "$ref": "#/$defs/optionalId" },
+        "agent": { "$ref": "#/$defs/optionalText" }, "provider": { "$ref": "#/$defs/optionalText" }, "model": { "$ref": "#/$defs/optionalText" },
+        "started_at": { "$ref": "#/$defs/timestamp" }, "ended_at": { "$ref": "#/$defs/optionalTimestamp" },
+        "outcome": { "enum": ["IN_PROGRESS", "SUCCEEDED", "FAILED", "INTERRUPTED", "CANCELLED", "UNKNOWN"] },
+        "input_tokens": { "$ref": "#/$defs/count" }, "output_tokens": { "$ref": "#/$defs/count" },
+        "cache_read_tokens": { "$ref": "#/$defs/count" }, "cache_write_tokens": { "$ref": "#/$defs/count" },
+        "total_tokens": { "$ref": "#/$defs/count" },
+        "total_tokens_source": { "enum": ["PROVIDER_REPORTED", "DETERMINISTIC_SUM", "NOT_AVAILABLE"] },
+        "usage_scope": { "enum": ["SEGMENT", "TASK", "SESSION", "UNKNOWN"] },
+        "usage_quality": { "enum": ["EXACT", "PARTIAL", "UNKNOWN"] }
+      }
+    },
+    "interruption": {
+      "type": "object", "additionalProperties": false,
+      "required": ["task_id", "segment_id", "occurred_at", "ended_at", "provider", "model", "category", "reset_at", "resume_session_id", "source", "quality"],
+      "properties": {
+        "task_id": { "$ref": "#/$defs/id" }, "segment_id": { "$ref": "#/$defs/optionalId" },
+        "occurred_at": { "$ref": "#/$defs/timestamp" }, "ended_at": { "$ref": "#/$defs/optionalTimestamp" },
+        "provider": { "$ref": "#/$defs/optionalText" }, "model": { "$ref": "#/$defs/optionalText" },
+        "category": { "enum": ["PROVIDER_CAPACITY", "PROVIDER_ERROR", "SESSION_INTERRUPTED", "NO_PROGRESS", "TOOL_FAILURE", "OWNER_WAIT", "UNKNOWN"] },
+        "reset_at": { "$ref": "#/$defs/optionalTimestamp" }, "resume_session_id": { "$ref": "#/$defs/optionalId" },
+        "source": { "$ref": "#/$defs/optionalId" }, "quality": { "$ref": "#/$defs/quality" }
+      }
+    },
+    "observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["observation_id", "task_id", "segment_id", "window_id", "provider", "model", "window_type", "observed_at", "used_percent", "remaining_percent", "reset_at", "source", "quality", "confidence"],
+      "properties": {
+        "observation_id": { "$ref": "#/$defs/id" }, "task_id": { "$ref": "#/$defs/optionalId" },
+        "segment_id": { "$ref": "#/$defs/optionalId" }, "window_id": { "$ref": "#/$defs/id" },
+        "provider": { "$ref": "#/$defs/text" }, "model": { "$ref": "#/$defs/optionalText" }, "window_type": { "$ref": "#/$defs/text" },
+        "observed_at": { "$ref": "#/$defs/timestamp" }, "used_percent": { "$ref": "#/$defs/percentage" },
+        "remaining_percent": { "$ref": "#/$defs/percentage" }, "reset_at": { "$ref": "#/$defs/optionalTimestamp" },
+        "source": { "$ref": "#/$defs/id" }, "quality": { "$ref": "#/$defs/quality" },
+        "confidence": { "oneOf": [{ "type": "number", "minimum": 0, "maximum": 1 }, { "$ref": "#/$defs/unavailable" }] }
+      }
+    },
+    "window": {
+      "type": "object", "additionalProperties": false,
+      "required": ["window_id", "provider", "model", "window_type", "started_at", "reset_at", "ended_at", "source", "quality"],
+      "properties": {
+        "window_id": { "$ref": "#/$defs/id" }, "provider": { "$ref": "#/$defs/text" }, "model": { "$ref": "#/$defs/optionalText" },
+        "window_type": { "$ref": "#/$defs/text" }, "started_at": { "$ref": "#/$defs/optionalTimestamp" },
+        "reset_at": { "$ref": "#/$defs/optionalTimestamp" }, "ended_at": { "$ref": "#/$defs/optionalTimestamp" },
+        "source": { "$ref": "#/$defs/id" }, "quality": { "$ref": "#/$defs/quality" }
+      }
+    }
+  }
+}
