@@ -9,10 +9,17 @@ export function appendLifecycleEvent(path, event) {
 
 export function readLifecycleEvents(path) {
   if (!existsSync(path)) return [];
+  const eventLines = new Map();
   return readFileSync(path, "utf8").split("\n").flatMap((line, index) => {
     if (!line.trim()) return [];
     try {
-      return [assertLifecycleEvent(JSON.parse(line))];
+      const event = assertLifecycleEvent(JSON.parse(line));
+      const previousLine = eventLines.get(event.event_id);
+      if (previousLine !== undefined) {
+        throw new Error(`duplicate event_id ${event.event_id} (first seen at line ${previousLine})`);
+      }
+      eventLines.set(event.event_id, index + 1);
+      return [event];
     } catch (error) {
       throw new Error(`invalid lifecycle JSONL at line ${index + 1}: ${error.message}`);
     }

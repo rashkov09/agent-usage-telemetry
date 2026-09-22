@@ -103,6 +103,85 @@ test("terminal and incomplete task queries stay distinct", () => {
   assert.equal(projection.taskSummary("open").total_lead_seconds, NOT_AVAILABLE);
 });
 
+test("terminal logical tasks reject reopening and terminal-status changes", () => {
+  const transitions = [
+    ["COMPLETED", "IN_PROGRESS"],
+    ["COMPLETED", "BLOCKED"],
+    ["COMPLETED", "FAILED"],
+    ["FAILED", "IN_PROGRESS"],
+    ["FAILED", "CANCELLED"],
+    ["CANCELLED", "PLANNED"],
+  ];
+
+  for (const [from, to] of transitions) {
+    const taskId = `${from.toLowerCase()}-to-${to.toLowerCase()}`;
+    const initial = taskEvent(taskId, { status: from });
+    const update = taskEvent(taskId, {
+      status: to,
+      completed_at: ["COMPLETED", "FAILED", "CANCELLED"].includes(to)
+        ? initial.data.completed_at
+        : NOT_AVAILABLE,
+    });
+    update.event_id = `${taskId}-update`;
+    assert.throws(() => buildLifecycleProjection([initial, update]), /terminal state cannot change/, `${from} -> ${to}`);
+  }
+});
+
+test("terminal logical tasks accept idempotent restatement and compatible metadata fill", () => {
+  const initial = taskEvent("terminal-restatement", {
+    task_kind: NOT_AVAILABLE,
+    project: NOT_AVAILABLE,
+    revision: NOT_AVAILABLE,
+  });
+  const identical = structuredClone(initial);
+  identical.event_id = "terminal-restatement-identical";
+  const restatement = structuredClone(initial);
+  restatement.event_id = "terminal-restatement-metadata";
+  restatement.data.task_kind = "implementation";
+  restatement.data.project = "example/project";
+  restatement.data.revision = "0123456789abcdef0123456789abcdef01234567";
+
+  const projection = buildLifecycleProjection([initial]);
+  assert.equal(projection.ingest(identical), true);
+  assert.equal(projection.ingest(restatement), true);
+  assert.equal(projection.taskSummary("terminal-restatement").status, "COMPLETED");
+  assert.equal(projection.taskSummary("terminal-restatement").completed_at, initial.data.completed_at);
+  assert.equal(projection.taskSummary("terminal-restatement").task_kind, "implementation");
+  assert.equal(projection.taskSummary("terminal-restatement").revision, restatement.data.revision);
+});
+
+test("non-terminal logical-task evidence remains ingestion ordered", () => {
+  const planned = taskEvent("non-terminal-order", {
+    status: "PLANNED",
+    started_at: NOT_AVAILABLE,
+    completed_at: NOT_AVAILABLE,
+  });
+  const inProgress = taskEvent("non-terminal-order", {
+    status: "IN_PROGRESS",
+    completed_at: NOT_AVAILABLE,
+  });
+  inProgress.event_id = "non-terminal-order-in-progress";
+
+  const projection = buildLifecycleProjection([planned, inProgress]);
+  assert.equal(projection.taskSummary("non-terminal-order").status, "IN_PROGRESS");
+  assert.equal(projection.taskSummary("non-terminal-order").started_at, inProgress.data.started_at);
+});
+
+test("same terminal event replay remains a no-op", () => {
+  const event = taskEvent("terminal-replay");
+  const projection = buildLifecycleProjection([event]);
+  assert.equal(projection.ingest(structuredClone(event)), false);
+  assert.equal(projection.eventIds.size, 1);
+  assert.equal(projection.taskSummary("terminal-replay").status, "COMPLETED");
+});
+
+test("terminal logical tasks reject a changed completed_at", () => {
+  const initial = taskEvent("changed-completed-at");
+  const update = taskEvent("changed-completed-at", { completed_at: "2030-01-01T02:00:00.000Z" });
+  update.event_id = "changed-completed-at-update";
+  assert.throws(() => buildLifecycleProjection([initial, update]), /terminal state cannot change/);
+});
+
 test("malformed and non-canonical timestamps fail closed", () => {
   const invalid = taskEvent("invalid", { created_at: "not-a-time" });
   assert.throws(() => assertLifecycleEvent(invalid), /ISO-8601/);

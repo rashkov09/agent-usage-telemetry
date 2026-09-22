@@ -141,7 +141,11 @@ Token dimensions remain separate. A task aggregate becomes `NOT_AVAILABLE` for a
 
 ### Raw and normalized storage
 
-`LifecycleStore` keeps the JSONL file as append-only authority and writes a normalized schema-version-1 projection atomically. Stable `event_id` values make repeated delivery a no-op; unrelated events are never deduplicated merely because their numbers match. On every reopen, the normalized projection is rebuilt from raw evidence, so a missing or stale projection cannot become authoritative.
+Raw append-only JSONL is authoritative. Each JSONL file must have exactly one authoritative writer; concurrent independent writers are unsupported. `LifecycleStore` writes a normalized schema-version-1 projection sidecar atomically, but that sidecar is non-authoritative and may be missing or stale. On every reopen, the normalized projection is rebuilt from raw evidence.
+
+Stable `event_id` values make same-event replay through `LifecycleStore.ingest` a no-op, while unrelated events are never deduplicated merely because their numbers match. If duplicate IDs are already present in raw JSONL (for example, after unsupported concurrent writes), those raw bytes are preserved and reconstruction or other file use fails closed until the operator repairs or quarantines the file externally. This package intentionally does not add locking, SQLite, quarantine, consensus, or recovery machinery.
+
+Once a `LOGICAL_TASK` reaches `COMPLETED`, `FAILED`, or `CANCELLED`, later evidence cannot reopen it, select another terminal status, or change `completed_at`. A distinct event may restate the same terminal status and timestamp and may fill compatible previously unavailable metadata; conflicting evidence fails closed. Non-terminal statuses remain ingestion/observation ordered rather than forming a workflow state machine.
 
 SQLite was considered for task/segment/window joins. T1 uses a deterministic in-process projection instead: it preserves zero runtime dependencies and Node 20/22/24 compatibility while the current dataset is local and append-only. The storage boundary can later gain a SQLite projection without changing raw lifecycle events or query semantics.
 

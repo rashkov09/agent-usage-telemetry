@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LifecycleStore, readLifecycleEvents } from "../index.js";
+import { LifecycleStore, appendLifecycleEvent, readLifecycleEvents } from "../index.js";
 import { segmentEvent, taskEvent } from "./lifecycle-helpers.js";
 
 test("raw JSONL and normalized projection survive restart with identical summaries", () => {
@@ -56,6 +56,46 @@ test("reopen rebuilds a stale projection from append-only raw evidence", () => {
     const reopened = new LifecycleStore(raw);
     assert.equal(reopened.projection.taskSummary("rebuild").status, "COMPLETED");
     assert.equal(JSON.parse(readFileSync(`${raw}.projection.json`, "utf8")).schema_version, 1);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("restart and rebuild enforce terminal logical-task invariants", () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-lifecycle-"));
+  const raw = join(directory, "lifecycle.jsonl");
+  try {
+    const store = new LifecycleStore(raw);
+    store.ingest(taskEvent("terminal-rebuild"));
+    const reopening = taskEvent("terminal-rebuild", {
+      status: "IN_PROGRESS",
+      completed_at: "NOT_AVAILABLE",
+    });
+    reopening.event_id = "terminal-rebuild-reopening";
+    appendLifecycleEvent(raw, reopening);
+    const bytes = readFileSync(raw, "utf8");
+
+    assert.throws(() => store.rebuild(), /terminal state cannot change/);
+    assert.throws(() => new LifecycleStore(raw), /terminal state cannot change/);
+    assert.equal(readFileSync(raw, "utf8"), bytes);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("duplicate IDs in raw evidence fail closed without rewriting the file", () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-lifecycle-"));
+  const raw = join(directory, "lifecycle.jsonl");
+  try {
+    const event = taskEvent("raw-duplicate");
+    const line = `${JSON.stringify(event)}\n`;
+    writeFileSync(raw, line, { mode: 0o600 });
+    appendFileSync(raw, line);
+    const bytes = readFileSync(raw, "utf8");
+
+    assert.throws(() => readLifecycleEvents(raw), /duplicate event_id raw-duplicate-task-completed/);
+    assert.throws(() => new LifecycleStore(raw), /duplicate event_id raw-duplicate-task-completed/);
+    assert.equal(readFileSync(raw, "utf8"), bytes);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
