@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { appendEvent, readEvents } from "./storage/jsonl.js";
 import { normalizeObservation } from "./core/telemetry.js";
 import { renderSummary } from "./core/summary.js";
+import { buildLifecycleProjection } from "./core/lifecycle.js";
+import { readLifecycleEvents } from "./storage/lifecycle-jsonl.js";
 
 function help() {
   return `agent-usage-telemetry
@@ -10,6 +12,7 @@ function help() {
 Usage:
   agent-usage-telemetry ingest --provider <openai|anthropic> --input <file|-> [--output <file>]
   agent-usage-telemetry summary [--input <jsonl>] [--last <count>]
+  agent-usage-telemetry lifecycle-summary --input <jsonl> [--task <task-id>]
 
 Defaults:
   ingest --output ./agent-usage.jsonl
@@ -54,6 +57,14 @@ export function run(argv) {
     const events = readEvents(input).slice(-count);
     if (events.length === 0) throw new Error(`no telemetry events found in ${input}`);
     process.stdout.write(`${events.map(renderSummary).join("\n\n---\n\n")}\n`);
+    return;
+  }
+  if (command === "lifecycle-summary") {
+    if (!options.input) throw new Error("lifecycle-summary requires --input");
+    const projection = buildLifecycleProjection(readLifecycleEvents(options.input));
+    const result = options.task ? projection.taskSummary(options.task) : projection.report();
+    if (!result) throw new Error(`unknown logical task: ${options.task}`);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
   throw new Error(`unknown command: ${command}`);

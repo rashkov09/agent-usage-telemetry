@@ -32,3 +32,16 @@ test("CLI ingests a sanitized observation and summarizes its JSONL", () => {
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("CLI reports a logical-task lifecycle without changing legacy commands", () => {
+  const fixture = new URL("./fixtures/gin-164-shaped.jsonl", import.meta.url);
+  const result = spawnSync(process.execPath, ["cli.js", "lifecycle-summary", "--input", fixture.pathname, "--task", "gin-164"], {
+    cwd: new URL("..", import.meta.url),
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const summary = JSON.parse(result.stdout);
+  assert.equal(summary.task_id, "gin-164");
+  assert.equal(summary.segment_ids.length, 2);
+  assert.equal(summary.total_lead_seconds, 11400);
+});
