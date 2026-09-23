@@ -5,10 +5,10 @@
   "additionalProperties": false,
   "required": ["lifecycle_event_version", "event_id", "event_type", "recorded_at", "data"],
   "properties": {
-    "lifecycle_event_version": { "const": 1 },
+    "lifecycle_event_version": { "enum": [1, 2] },
     "event_id": { "$ref": "#/$defs/id" },
     "event_type": {
-      "enum": ["LOGICAL_TASK", "EXECUTION_SEGMENT", "INTERRUPTION", "CAPACITY_OBSERVATION", "CAPACITY_WINDOW"]
+      "enum": ["LOGICAL_TASK", "EXECUTION_SEGMENT", "INTERRUPTION", "CAPACITY_OBSERVATION", "CAPACITY_WINDOW", "CAPACITY_INTERVAL_EVIDENCE"]
     },
     "recorded_at": { "type": "string", "format": "date-time" },
     "data": { "type": "object" }
@@ -33,6 +33,13 @@
     {
       "if": { "properties": { "event_type": { "const": "CAPACITY_WINDOW" } } },
       "then": { "properties": { "data": { "$ref": "#/$defs/window" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "CAPACITY_INTERVAL_EVIDENCE" } } },
+      "then": { "properties": {
+        "lifecycle_event_version": { "const": 2 },
+        "data": { "$ref": "#/$defs/intervalEvidence" }
+      } }
     }
   ],
   "$defs": {
@@ -115,6 +122,34 @@
         "reset_at": { "$ref": "#/$defs/optionalTimestamp" }, "ended_at": { "$ref": "#/$defs/optionalTimestamp" },
         "source": { "$ref": "#/$defs/id" }, "quality": { "$ref": "#/$defs/quality" }
       }
+    },
+    "intervalEvidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evidence_id", "window_id", "start_observation_id", "end_observation_id", "status", "causes", "source", "quality"],
+      "properties": {
+        "evidence_id": { "$ref": "#/$defs/id" }, "window_id": { "$ref": "#/$defs/id" },
+        "start_observation_id": { "$ref": "#/$defs/id" }, "end_observation_id": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["COMPLETE", "INCOMPLETE", "NOT_AVAILABLE"] },
+        "causes": {
+          "type": "array", "uniqueItems": true,
+          "items": { "enum": ["CONCURRENT_SAME_ACCOUNT_EXECUTION", "DIRECT_PROVIDER_CALL", "HEARTBEAT_ACTIVITY", "BACKGROUND_ACTIVITY", "OTHER_SESSION_ACTIVITY", "RETRY_OR_PROVIDER_OVERHEAD", "OUTSIDE_OPENCLAW_ACTIVITY", "IDLE_GAP_CONSUMPTION", "UNEXPLAINED_CAPACITY_DRIFT", "OPEN_SEGMENT", "PROVIDER_NOT_AVAILABLE", "MODEL_NOT_AVAILABLE", "EVIDENCE_NOT_RECORDED", "PRODUCER_CANNOT_DETERMINE"] }
+        },
+        "source": { "$ref": "#/$defs/optionalId" },
+        "quality": { "enum": ["PROVIDER_REPORTED", "PROVIDER_CLIENT_REPORTED", "RUNTIME_REPORTED", "NOT_AVAILABLE"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "COMPLETE" } } },
+          "then": {
+            "properties": {
+              "causes": { "maxItems": 0 },
+              "source": { "$ref": "#/$defs/id" },
+              "quality": { "enum": ["PROVIDER_REPORTED", "PROVIDER_CLIENT_REPORTED", "RUNTIME_REPORTED"] }
+            }
+          },
+          "else": { "properties": { "causes": { "minItems": 1 } } }
+        }
+      ]
     }
   }
 }

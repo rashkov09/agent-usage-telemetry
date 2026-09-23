@@ -3,8 +3,14 @@ import assert from "node:assert/strict";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LifecycleStore, appendLifecycleEvent, readLifecycleEvents } from "../index.js";
-import { segmentEvent, taskEvent } from "./lifecycle-helpers.js";
+import { LifecycleStore, appendLifecycleEvent, buildCalibrationDataset, readLifecycleEvents } from "../index.js";
+import {
+  intervalEvidenceEvent,
+  observationEvent,
+  segmentEvent,
+  taskEvent,
+  windowEvent,
+} from "./lifecycle-helpers.js";
 
 test("raw JSONL and normalized projection survive restart with identical summaries", () => {
   const directory = mkdtempSync(join(tmpdir(), "agent-lifecycle-"));
@@ -16,8 +22,8 @@ test("raw JSONL and normalized projection survive restart with identical summari
     const before = store.projection.taskSummary("restart");
     const reopened = new LifecycleStore(raw);
     assert.deepEqual(reopened.projection.taskSummary("restart"), before);
-    assert.equal(reopened.projection.toJSON().schema_version, 1);
-    assert.equal(JSON.parse(readFileSync(`${raw}.projection.json`, "utf8")).schema_version, 1);
+    assert.equal(reopened.projection.toJSON().schema_version, 2);
+    assert.equal(JSON.parse(readFileSync(`${raw}.projection.json`, "utf8")).schema_version, 2);
     assert.equal(statSync(raw).mode & 0o077, 0);
     assert.equal(statSync(`${raw}.projection.json`).mode & 0o077, 0);
   } finally {
@@ -55,7 +61,31 @@ test("reopen rebuilds a stale projection from append-only raw evidence", () => {
     writeFileSync(`${raw}.projection.json`, JSON.stringify({ schema_version: 999 }), { mode: 0o600 });
     const reopened = new LifecycleStore(raw);
     assert.equal(reopened.projection.taskSummary("rebuild").status, "COMPLETED");
-    assert.equal(JSON.parse(readFileSync(`${raw}.projection.json`, "utf8")).schema_version, 1);
+    assert.equal(JSON.parse(readFileSync(`${raw}.projection.json`, "utf8")).schema_version, 2);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("version 2 completeness evidence rebuilds to the identical calibration dataset", () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-lifecycle-"));
+  const raw = join(directory, "lifecycle.jsonl");
+  try {
+    const store = new LifecycleStore(raw);
+    store.ingest(taskEvent("complete-rebuild", { completed_at: "2030-01-01T03:00:00.000Z" }));
+    store.ingest(windowEvent("complete-window", "5h", "2030-01-01T00:00:00.000Z", "2030-01-01T05:00:00.000Z"));
+    store.ingest(observationEvent("complete-start", "complete-window", "2030-01-01T00:30:00.000Z", {
+      remaining_percent: 90, reset_at: "2030-01-01T05:00:00.000Z",
+    }));
+    store.ingest(segmentEvent("complete-segment", "complete-rebuild", "2030-01-01T01:00:00.000Z", "2030-01-01T02:00:00.000Z"));
+    store.ingest(observationEvent("complete-end", "complete-window", "2030-01-01T02:30:00.000Z", {
+      remaining_percent: 80, reset_at: "2030-01-01T05:00:00.000Z",
+    }));
+    store.ingest(intervalEvidenceEvent("complete-proof", "complete-window", "complete-start", "complete-end"));
+    const before = buildCalibrationDataset(store.projection);
+    const after = buildCalibrationDataset(new LifecycleStore(raw).projection);
+    assert.deepEqual(after, before);
+    assert.equal(after.samples[0].attribution_completeness, "COMPLETE");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

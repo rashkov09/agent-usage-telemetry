@@ -80,7 +80,7 @@ function compareByTimeAndId(left, right, timeKey, idKey) {
 
 export class LifecycleProjection {
   constructor() {
-    this.schemaVersion = 1;
+    this.schemaVersion = 2;
     this.eventIds = new Set();
     this.eventsById = new Map();
     this.tasks = new Map();
@@ -88,6 +88,7 @@ export class LifecycleProjection {
     this.interruptions = new Map();
     this.capacityObservations = new Map();
     this.capacityWindows = new Map();
+    this.capacityIntervalEvidence = new Map();
   }
 
   ingest(event) {
@@ -139,6 +140,17 @@ export class LifecycleProjection {
       this.#insertUnique(this.capacityObservations, data.observation_id, data, "capacity observation");
     } else if (event.event_type === "CAPACITY_WINDOW") {
       this.#insertUnique(this.capacityWindows, data.window_id, data, "capacity window");
+    } else if (event.event_type === "CAPACITY_INTERVAL_EVIDENCE") {
+      const window = this.capacityWindows.get(data.window_id);
+      const start = this.capacityObservations.get(data.start_observation_id);
+      const end = this.capacityObservations.get(data.end_observation_id);
+      if (!window || !start || !end || start.window_id !== data.window_id || end.window_id !== data.window_id) {
+        throw new Error(`capacity interval evidence references unknown or mismatched evidence ${data.evidence_id}`);
+      }
+      if (milliseconds(start.observed_at) >= milliseconds(end.observed_at)) {
+        throw new Error(`capacity interval evidence ${data.evidence_id} is not chronological`);
+      }
+      this.#insertUnique(this.capacityIntervalEvidence, data.evidence_id, data, "capacity interval evidence");
     }
     this.eventIds.add(event.event_id);
     this.eventsById.set(event.event_id, clone(event));
@@ -308,6 +320,7 @@ export class LifecycleProjection {
       ])),
       capacity_windows: this.capacityWindows.size,
       capacity_observations: this.capacityObservations.size,
+      capacity_interval_evidence: this.capacityIntervalEvidence.size,
       interruption_counts: Object.fromEntries([...new Set(interruptions.map((event) => event.category))].sort().map((category) => [
         category, interruptions.filter((event) => event.category === category).length,
       ])),
@@ -328,6 +341,7 @@ export class LifecycleProjection {
       interruptions: sortMap(this.interruptions),
       capacity_observations: sortMap(this.capacityObservations),
       capacity_windows: sortMap(this.capacityWindows),
+      capacity_interval_evidence: sortMap(this.capacityIntervalEvidence),
     };
   }
 }

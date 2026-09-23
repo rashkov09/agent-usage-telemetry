@@ -224,5 +224,6 @@ test("lifecycle JSON Schema is valid JSON and covers every public event kind", (
   assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema");
   assert.deepEqual(schema.properties.event_type.enum, [
     "LOGICAL_TASK", "EXECUTION_SEGMENT", "INTERRUPTION", "CAPACITY_OBSERVATION", "CAPACITY_WINDOW",
+    "CAPACITY_INTERVAL_EVIDENCE",
   ]);
 });

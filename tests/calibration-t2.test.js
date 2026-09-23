@@ -11,6 +11,7 @@ import {
   trainCapacityEstimator,
 } from "../index.js";
 import {
+  intervalEvidenceEvent,
   interruptionEvent,
   observationEvent,
   segmentEvent,
@@ -79,6 +80,7 @@ function validIntervalEvents({ secondModel = false, weekly = false, limit = fals
       { reset_at: RESET, source: "provider-client", quality: "PROVIDER_CLIENT_REPORTED" },
     ));
   }
+  events.push(intervalEvidenceEvent("interval-evidence", windowId, "start", "end"));
   return events;
 }
 
@@ -97,6 +99,11 @@ function trainingSample(index, overrides = {}) {
     cache_read_tokens: scale * 50,
     cache_write_tokens: scale * 5,
     active_execution_seconds: scale * 60,
+    attribution_completeness: "COMPLETE",
+    attribution_completeness_causes: [],
+    attribution_evidence_ids: [`evidence-${index}`],
+    attribution_evidence_sources: ["account-activity-ledger"],
+    attribution_evidence_qualities: ["RUNTIME_REPORTED"],
     task_count: 1,
     task_class: "review",
     usable_for_single_model_estimator: true,
@@ -264,7 +271,7 @@ test("duplicate and out-of-order evidence rebuild to the identical dataset", () 
   const events = validIntervalEvents();
   const ordered = buildCalibrationDataset(buildLifecycleProjection(events));
   const outOfOrder = buildCalibrationDataset(buildLifecycleProjection([
-    events[0], events[1], events[4], events[3], events[2],
+    events[0], events[1], events[4], events[3], events[2], events[5],
   ]));
   const duplicate = buildCalibrationDataset(buildLifecycleProjection([...events, events[2], events[4]]));
   assert.deepEqual(outOfOrder, ordered);

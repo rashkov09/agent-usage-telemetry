@@ -10,9 +10,11 @@ export const CALIBRATION_REASONS = Object.freeze([
   "PROVIDER_MODEL_MISMATCH",
   "MISSING_BASELINE_OBSERVATION",
   "STALE_MODEL",
+  "EVIDENCE_INCOMPLETE",
+  "EVIDENCE_COMPLETENESS_NOT_AVAILABLE",
 ]);
 
-export const CAPACITY_ESTIMATOR_VERSION = "t2-nnls-v1";
+export const CAPACITY_ESTIMATOR_VERSION = "t3-complete-evidence-nnls-v1";
 export const MINIMUM_INDEPENDENT_WINDOWS = 8;
 
 const OBSERVED_QUALITIES = new Set([
@@ -59,6 +61,17 @@ function protectedMinimum(builtInMinimum, requestedMinimum) {
   return Number.isInteger(requestedMinimum)
     ? Math.max(builtInMinimum, requestedMinimum)
     : builtInMinimum;
+}
+
+function hasCompleteAttributionEvidence(sample) {
+  return sample.attribution_completeness === "COMPLETE" &&
+    Array.isArray(sample.attribution_completeness_causes) && sample.attribution_completeness_causes.length === 0 &&
+    Array.isArray(sample.attribution_evidence_ids) && sample.attribution_evidence_ids.length > 0 &&
+    new Set(sample.attribution_evidence_ids).size === sample.attribution_evidence_ids.length &&
+    Array.isArray(sample.attribution_evidence_sources) && sample.attribution_evidence_sources.length > 0 &&
+    sample.attribution_evidence_sources.every((source) => source !== NOT_AVAILABLE) &&
+    Array.isArray(sample.attribution_evidence_qualities) && sample.attribution_evidence_qualities.length > 0 &&
+    sample.attribution_evidence_qualities.every((quality) => OBSERVED_QUALITIES.has(quality));
 }
 
 function strictTotal(records, key) {
@@ -116,6 +129,32 @@ function matchingInterruptions(state, window, startTime, endTime) {
     (event.reset_at === NOT_AVAILABLE || window.reset_at === NOT_AVAILABLE || event.reset_at === window.reset_at));
 }
 
+function completenessForInterval(state, identity) {
+  const evidence = (state.capacity_interval_evidence ?? []).filter((item) =>
+    item.window_id === identity.window_id &&
+    item.start_observation_id === identity.start_observation_id &&
+    item.end_observation_id === identity.end_observation_id);
+  if (!evidence.length) {
+    return {
+      status: NOT_AVAILABLE,
+      causes: ["EVIDENCE_NOT_RECORDED"],
+      evidence_ids: [],
+      sources: [],
+      qualities: [],
+    };
+  }
+  const statuses = new Set(evidence.map((item) => item.status));
+  return {
+    status: statuses.has("INCOMPLETE") ? "INCOMPLETE"
+      : statuses.has(NOT_AVAILABLE) ? NOT_AVAILABLE
+        : "COMPLETE",
+    causes: [...new Set(evidence.flatMap((item) => item.causes))].sort(),
+    evidence_ids: evidence.map((item) => item.evidence_id).sort(),
+    sources: [...new Set(evidence.map((item) => item.source))].sort(),
+    qualities: [...new Set(evidence.map((item) => item.quality))].sort(),
+  };
+}
+
 function sampleFromInterval(state, window, start, end, delta) {
   const startedAt = Date.parse(start.observed_at);
   const endedAt = Date.parse(end.observed_at);
@@ -157,15 +196,18 @@ function sampleFromInterval(state, window, start, end, delta) {
   const tokenTotals = Object.fromEntries(TOKEN_FEATURES.map((key) => [key, strictTotal(segments, key)]));
   const hasAllTokenDimensions = TOKEN_FEATURES.every((key) => tokenTotals[key] !== NOT_AVAILABLE);
   const singleModel = !hasUnknownModel && knownModels.length === 1 ? knownModels[0] : NOT_AVAILABLE;
-  const reason = hasUnknownModel || knownModels.length > 1 ? "MODEL_MIX_UNRESOLVED"
-    : singleModel === NOT_AVAILABLE || !hasAllTokenDimensions ? "MISSING_TOKEN_DIMENSIONS"
-      : NOT_AVAILABLE;
   const limitEvents = matchingInterruptions(state, window, startedAt, endedAt);
   const identity = {
     window_id: window.window_id,
     start_observation_id: start.observation_id,
     end_observation_id: end.observation_id,
   };
+  const completeness = completenessForInterval(state, identity);
+  const reason = completeness.status === "INCOMPLETE" ? "EVIDENCE_INCOMPLETE"
+    : completeness.status === NOT_AVAILABLE ? "EVIDENCE_COMPLETENESS_NOT_AVAILABLE"
+      : hasUnknownModel || knownModels.length > 1 ? "MODEL_MIX_UNRESOLVED"
+        : singleModel === NOT_AVAILABLE || !hasAllTokenDimensions ? "MISSING_TOKEN_DIMENSIONS"
+          : NOT_AVAILABLE;
 
   return {
     sample_id: `cal-${digest(identity).slice(0, 24)}`,
@@ -190,6 +232,11 @@ function sampleFromInterval(state, window, start, end, delta) {
     evidence_quality: start.quality,
     endpoint_evidence_class: "OBSERVED",
     consumption_evidence_class: "DERIVED",
+    attribution_completeness: completeness.status,
+    attribution_completeness_causes: completeness.causes,
+    attribution_evidence_ids: completeness.evidence_ids,
+    attribution_evidence_sources: completeness.sources,
+    attribution_evidence_qualities: completeness.qualities,
     usable_for_single_model_estimator: reason === NOT_AVAILABLE,
     unusable_reason: reason,
   };
@@ -257,7 +304,7 @@ export function buildCalibrationDataset(projection) {
   }
   const unique = new Map(samples.map((sample) => [sample.sample_id, sample]));
   return {
-    calibration_dataset_version: 1,
+    calibration_dataset_version: 2,
     samples: [...unique.values()].sort((left, right) => left.sample_id.localeCompare(right.sample_id)),
     capacity_limit_anchors: capacityLimitAnchors(state),
     rejections: rejections.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
@@ -267,14 +314,13 @@ export function buildCalibrationDataset(projection) {
 function eligibleSamples(samples, scope) {
   return [...new Map(samples.map((sample) => [sample.sample_id, sample])).values()].filter((sample) =>
     sample.provider === scope.provider && sample.model === scope.model && sample.window_type === scope.window_type &&
+    hasCompleteAttributionEvidence(sample) &&
     sample.usable_for_single_model_estimator === true && Number.isFinite(sample.observed_consumption_percent) &&
     TOKEN_FEATURES.every((key) => isCount(sample[key])));
 }
 
 function featureNamesFor(samples) {
-  return samples.every((sample) => Number.isFinite(sample.active_execution_seconds))
-    ? [...TOKEN_FEATURES, "active_execution_seconds"]
-    : [...TOKEN_FEATURES];
+  return [...TOKEN_FEATURES];
 }
 
 function fitNnls(samples, featureNames) {
@@ -347,7 +393,10 @@ function trainingIdentity(samples, scope) {
       ["window_id", sample.window_id],
       ["observed_consumption_percent", sample.observed_consumption_percent],
       ...TOKEN_FEATURES.map((key) => [key, sample[key]]),
-      ["active_execution_seconds", sample.active_execution_seconds],
+      ["attribution_completeness", sample.attribution_completeness],
+      ["attribution_evidence_ids", sample.attribution_evidence_ids],
+      ["attribution_evidence_sources", sample.attribution_evidence_sources],
+      ["attribution_evidence_qualities", sample.attribution_evidence_qualities],
     ])).sort((left, right) => left.sample_id.localeCompare(right.sample_id)),
   });
 }
@@ -372,11 +421,17 @@ export function trainCapacityEstimator(samples, scope, { minimumIndependentWindo
     generated_at: generatedAt,
   };
   if (!selected.length) {
-    const reason = labeledScopeSamples.some((sample) => sample.unusable_reason === "MODEL_MIX_UNRESOLVED")
-      ? "MODEL_MIX_UNRESOLVED"
-      : labeledScopeSamples.some((sample) => sample.model === scope.model && sample.unusable_reason === "MISSING_TOKEN_DIMENSIONS")
-        ? "MISSING_TOKEN_DIMENSIONS"
-        : "NO_CAPACITY_LABELS";
+    const reason = labeledScopeSamples.some((sample) => sample.model === scope.model && (
+      sample.attribution_completeness === "INCOMPLETE" || sample.unusable_reason === "EVIDENCE_INCOMPLETE"))
+      ? "EVIDENCE_INCOMPLETE"
+      : labeledScopeSamples.some((sample) => sample.model === scope.model && (
+        !hasCompleteAttributionEvidence(sample) || sample.unusable_reason === "EVIDENCE_COMPLETENESS_NOT_AVAILABLE"))
+        ? "EVIDENCE_COMPLETENESS_NOT_AVAILABLE"
+        : labeledScopeSamples.some((sample) => sample.unusable_reason === "MODEL_MIX_UNRESOLVED")
+          ? "MODEL_MIX_UNRESOLVED"
+          : labeledScopeSamples.some((sample) => sample.model === scope.model && sample.unusable_reason === "MISSING_TOKEN_DIMENSIONS")
+            ? "MISSING_TOKEN_DIMENSIONS"
+            : "NO_CAPACITY_LABELS";
     return unavailable(reason, common);
   }
   if (windows.length < requiredWindows) return unavailable("INSUFFICIENT_SAMPLES", common);
@@ -461,6 +516,9 @@ export function estimateCapacity(artifact, request) {
 
 export function summarizeTaskClassCapacity(samples, scope, taskClass, { minimumIndependentWindows = 3 } = {}) {
   const requiredWindows = protectedMinimum(3, minimumIndependentWindows);
+  const candidates = [...new Map(samples.map((sample) => [sample.sample_id, sample])).values()].filter((sample) =>
+    sample.provider === scope.provider && sample.model === scope.model && sample.window_type === scope.window_type &&
+    sample.task_count === 1 && sample.task_class === taskClass && Number.isFinite(sample.observed_consumption_percent));
   const selected = eligibleSamples(samples, scope).filter((sample) =>
     sample.task_count === 1 && sample.task_class === taskClass);
   const windows = new Set(selected.map((sample) => sample.window_id));
@@ -473,7 +531,14 @@ export function summarizeTaskClassCapacity(samples, scope, taskClass, { minimumI
     sample_count: selected.length,
     independent_window_count: windows.size,
   };
-  if (!selected.length) return unavailable("NO_CAPACITY_LABELS", common);
+  if (!selected.length) {
+    const reason = candidates.some((sample) => sample.attribution_completeness === "INCOMPLETE")
+      ? "EVIDENCE_INCOMPLETE"
+      : candidates.some((sample) => !hasCompleteAttributionEvidence(sample))
+        ? "EVIDENCE_COMPLETENESS_NOT_AVAILABLE"
+        : "NO_CAPACITY_LABELS";
+    return unavailable(reason, common);
+  }
   if (windows.size < requiredWindows) return unavailable("INSUFFICIENT_SAMPLES", common);
   const values = selected.map((sample) => sample.observed_consumption_percent);
   return {
@@ -505,6 +570,9 @@ export function renderCalibrationSummary(projection) {
     const samples = dataset.samples.filter((sample) =>
       sample.provider === scope.provider && sample.window_type === scope.window_type &&
       (scope.model === NOT_AVAILABLE || sample.model === scope.model));
+    const completeSamples = samples.filter((sample) => sample.attribution_completeness === "COMPLETE");
+    const incompleteSamples = samples.filter((sample) => sample.attribution_completeness === "INCOMPLETE");
+    const unknownSamples = samples.filter((sample) => sample.attribution_completeness === NOT_AVAILABLE);
     const estimator = trainCapacityEstimator(dataset.samples, scope);
     const latest = observations.at(-1);
     lines.push(
@@ -514,6 +582,9 @@ export function renderCalibrationSummary(projection) {
       `OBSERVED latest remaining: ${latest?.remaining_percent ?? NOT_AVAILABLE}`,
       `OBSERVED reset_at: ${latest?.reset_at ?? NOT_AVAILABLE}`,
       `DERIVED calibration samples: ${samples.length}`,
+      `DERIVED COMPLETE attribution samples: ${completeSamples.length}`,
+      `DERIVED INCOMPLETE attribution samples: ${incompleteSamples.length}`,
+      `NOT_AVAILABLE attribution samples: ${unknownSamples.length}`,
       `ESTIMATED availability: ${estimator.availability}`,
       `ESTIMATED confidence: ${estimator.confidence ?? "LOW"}`,
       `ESTIMATED validation error: ${estimator.validation_error === NOT_AVAILABLE ? NOT_AVAILABLE : `${estimator.validation_error.mean_absolute_percentage_point_error}pp MAE`}`,
@@ -524,6 +595,9 @@ export function renderCalibrationSummary(projection) {
     "",
     "OBSERVED windows: 0",
     "DERIVED calibration samples: 0",
+    "DERIVED COMPLETE attribution samples: 0",
+    "DERIVED INCOMPLETE attribution samples: 0",
+    "NOT_AVAILABLE attribution samples: 0",
     `ESTIMATED availability: ${NOT_AVAILABLE}`,
     "ESTIMATED confidence: LOW",
     "ESTIMATED validation error: NOT_AVAILABLE",

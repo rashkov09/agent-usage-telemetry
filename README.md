@@ -104,13 +104,14 @@ The input examples document the supported provider shapes. A JSON Schema for nor
 
 ## Logical-task lifecycle
 
-A logical task is not assumed to be a run or a session. Lifecycle evidence uses a separate versioned envelope with a stable `event_id` and one of five provider-neutral event types:
+A logical task is not assumed to be a run or a session. Lifecycle evidence uses a separate versioned envelope with a stable `event_id` and one of six provider-neutral event types. Version 1 records remain valid; the new interval-evidence event requires version 2:
 
 - `LOGICAL_TASK`: durable task identity, lifecycle timestamps/status, optional sanitized project and full revision;
 - `EXECUTION_SEGMENT`: one contiguous run with independently supplied run/session/agent/provider/model and token dimensions;
 - `INTERRUPTION`: normalized `PROVIDER_CAPACITY`, `PROVIDER_ERROR`, `SESSION_INTERRUPTED`, `NO_PROGRESS`, `TOOL_FAILURE`, `OWNER_WAIT`, or `UNKNOWN` evidence;
 - `CAPACITY_OBSERVATION`: percentages, reset, source, and quality for any named window type;
 - `CAPACITY_WINDOW`: a generalized calibration boundary such as `5h`, `weekly`, or a provider-specific future window.
+- `CAPACITY_INTERVAL_EVIDENCE`: a producer determination binding exact start/end observation IDs and declaring task-attribution evidence `COMPLETE`, `INCOMPLETE`, or `NOT_AVAILABLE` with qualitative causes and provenance.
 
 The runtime validator rejects extra fields, non-canonical timestamps, absolute/parent project paths, non-sanitized IDs, short SHAs, raw content fields, and inconsistent terminal timestamps. It never accepts a prompt or raw provider error body as lifecycle data. The full envelope is documented by `schema/lifecycle-event.schema.json`.
 
@@ -155,14 +156,24 @@ SQLite was considered for task/segment/window joins. T1 uses a deterministic in-
 
 `runCapacityEstimator(input, estimator)` is an interface for later empirical work. It supplies no coefficients or quota assumptions and forces every result to carry `quality: "ESTIMATED"`, an estimator ID, and confidence. Observed provider/client/runtime evidence outranks estimates and is never overwritten.
 
-T2 adds a conservative built-in calibration path without changing that T1 compatibility seam:
+T2 added a conservative built-in calibration path without changing that T1 compatibility seam:
 
 - `deriveCapacityDelta(start, end)` accepts only two chronologically ordered, non-estimated observations with the same provider, window type, window ID, reset timestamp, source, and quality. Both remaining percentages must be present, the interval must end no later than the reset, and remaining capacity may not increase. Otherwise the result is `NOT_AVAILABLE`.
 - `buildCalibrationDataset(projection)` converts adjacent compatible observations into rebuildable samples. Endpoint percentages are `OBSERVED`; their difference is `DERIVED`. It preserves input, output, cache-read, and cache-write tokens as four separate fields, records active execution independently, rejects segments crossing interval boundaries, preserves a sorted model mix, and marks mixed-model samples unusable for a single-model estimator.
 - Capacity-limit events are retained as `OBSERVED` anchors. An anchor does **not** imply that accumulated tokens equal 100% of provider quota; `quota_exhaustion_percent` remains `NOT_AVAILABLE` unless separately observed.
 - 5-hour, weekly, and any future window types are independent estimator scopes. Provider and model must also match exactly.
 
-`trainCapacityEstimator(samples, scope)` uses deterministic non-negative linear coordinate descent over the four separate token features. Active execution duration is added only when every selected sample supplies it. There are no provider-specific token weights or quota constants. Training requires at least **8 independent capacity windows**; fewer windows return `NOT_AVAILABLE / INSUFFICIENT_SAMPLES`. Model-mix and missing-dimension evidence is never silently coerced into training data.
+T3 adds an account-activity completeness gate. A provider capacity delta is account-wide evidence and is not task consumption merely because every visible task segment is closed and provider/model attributed.
+
+- A `CAPACITY_INTERVAL_EVIDENCE` record binds one exact adjacent observation pair. `COMPLETE` requires observed provenance and no causes. `INCOMPLETE` and `NOT_AVAILABLE` require at least one qualitative cause. Completeness cannot be estimated.
+- The producer may declare `COMPLETE` only when it can account for all same-account activity over the exact interval and attribute the provider delta to the included segments. It must consider concurrent executions, direct provider calls, heartbeat/background activity, other sessions, retries/provider overhead, activity outside the recorder, and idle-gap consumption.
+- Missing historical evidence is `NOT_AVAILABLE / EVIDENCE_COMPLETENESS_NOT_AVAILABLE`. An `INCOMPLETE` declaration is `EVIDENCE_INCOMPLETE`. Unknown plus complete evidence remains unknown; incomplete plus complete evidence remains incomplete. Replay cannot upgrade either state.
+- Only `COMPLETE` samples can train or contribute task-class medians/ranges. `active_execution_seconds` remains a diagnostic field and is not an estimator feature or proof of attribution. No wall-clock coverage threshold exists.
+- Dataset version 2 and estimator version `t3-complete-evidence-nnls-v1` make T2 artifacts stale. Rebuilding the same append-only evidence is deterministic; old samples do not silently acquire completeness.
+
+Current OpenClaw task records do not prove account-wide completeness: task counters are task-correlated, but provider capacity snapshots are account-wide and activity outside the instrumented run is not excluded. Historical OpenAI and Anthropic intervals therefore remain `NOT_AVAILABLE` unless a future producer records sufficient interval evidence. No quota percentage is converted into tokens or a numeric residual.
+
+`trainCapacityEstimator(samples, scope)` uses deterministic non-negative linear coordinate descent over the four separate token features. Active execution duration is diagnostic only and never enters the fitted model. There are no provider-specific token weights or quota constants. Training requires at least **8 independent capacity windows**; fewer windows return `NOT_AVAILABLE / INSUFFICIENT_SAMPLES`. Model-mix and missing-dimension evidence is never silently coerced into training data.
 
 Evaluation is deterministic leave-one-window-out validation. The artifact reports mean, median, and maximum absolute percentage-point error and the held-out sample count. Confidence means:
 
@@ -178,7 +189,7 @@ Fitted parameters are not persisted by this package. An artifact nevertheless ca
 
 Use `agent-usage-telemetry calibration-summary --input <lifecycle.jsonl>` for a human summary. Its lines explicitly label `OBSERVED`, `DERIVED`, `ESTIMATED`, and `NOT_AVAILABLE` evidence.
 
-Machine-readable unavailability reasons are a small stable set: `INSUFFICIENT_SAMPLES`, `INCOMPATIBLE_WINDOWS`, `MISSING_TOKEN_DIMENSIONS`, `MODEL_MIX_UNRESOLVED`, `NO_CAPACITY_LABELS`, `PROVIDER_MODEL_MISMATCH`, `MISSING_BASELINE_OBSERVATION`, and `STALE_MODEL`.
+Machine-readable unavailability reasons are a small stable set: `INSUFFICIENT_SAMPLES`, `INCOMPATIBLE_WINDOWS`, `MISSING_TOKEN_DIMENSIONS`, `MODEL_MIX_UNRESOLVED`, `NO_CAPACITY_LABELS`, `PROVIDER_MODEL_MISMATCH`, `MISSING_BASELINE_OBSERVATION`, `STALE_MODEL`, `EVIDENCE_INCOMPLETE`, and `EVIDENCE_COMPLETENESS_NOT_AVAILABLE`.
 
 Useful future calibration requires a capacity observation at task/interval start and end, stable window/reset identity, separate token counters for every resumed segment, and a categorized capacity-limit timestamp. Session-wide changes must not be attributed to a task when those interval facts are absent.
 

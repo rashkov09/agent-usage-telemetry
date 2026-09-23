@@ -6,6 +6,28 @@ export const LIFECYCLE_EVENT_TYPES = Object.freeze([
   "INTERRUPTION",
   "CAPACITY_OBSERVATION",
   "CAPACITY_WINDOW",
+  "CAPACITY_INTERVAL_EVIDENCE",
+]);
+
+export const CAPACITY_COMPLETENESS_STATES = Object.freeze([
+  "COMPLETE", "INCOMPLETE", NOT_AVAILABLE,
+]);
+
+export const CAPACITY_COMPLETENESS_CAUSES = Object.freeze([
+  "CONCURRENT_SAME_ACCOUNT_EXECUTION",
+  "DIRECT_PROVIDER_CALL",
+  "HEARTBEAT_ACTIVITY",
+  "BACKGROUND_ACTIVITY",
+  "OTHER_SESSION_ACTIVITY",
+  "RETRY_OR_PROVIDER_OVERHEAD",
+  "OUTSIDE_OPENCLAW_ACTIVITY",
+  "IDLE_GAP_CONSUMPTION",
+  "UNEXPLAINED_CAPACITY_DRIFT",
+  "OPEN_SEGMENT",
+  "PROVIDER_NOT_AVAILABLE",
+  "MODEL_NOT_AVAILABLE",
+  "EVIDENCE_NOT_RECORDED",
+  "PRODUCER_CANNOT_DETERMINE",
 ]);
 
 export const TASK_STATUSES = Object.freeze([
@@ -59,6 +81,10 @@ const OBSERVATION_KEYS = [
 const WINDOW_KEYS = [
   "window_id", "provider", "model", "window_type", "started_at", "reset_at", "ended_at",
   "source", "quality",
+];
+const INTERVAL_EVIDENCE_KEYS = [
+  "evidence_id", "window_id", "start_observation_id", "end_observation_id",
+  "status", "causes", "source", "quality",
 ];
 
 function assertObject(value, label) {
@@ -232,12 +258,42 @@ function assertWindow(data) {
   if (!EVIDENCE_QUALITIES.includes(data.quality)) throw new TypeError("unsupported evidence quality");
 }
 
+function assertIntervalEvidence(data) {
+  assertExactKeys(data, INTERVAL_EVIDENCE_KEYS, "capacity interval evidence");
+  for (const key of ["evidence_id", "window_id", "start_observation_id", "end_observation_id"]) {
+    assertIdentifier(data[key], key);
+  }
+  if (data.start_observation_id === data.end_observation_id) {
+    throw new TypeError("capacity interval evidence requires distinct observations");
+  }
+  if (!CAPACITY_COMPLETENESS_STATES.includes(data.status)) {
+    throw new TypeError("unsupported capacity completeness status");
+  }
+  if (!Array.isArray(data.causes) || new Set(data.causes).size !== data.causes.length ||
+      data.causes.some((cause) => !CAPACITY_COMPLETENESS_CAUSES.includes(cause))) {
+    throw new TypeError("capacity completeness causes must be unique supported values");
+  }
+  if ((data.status === "COMPLETE") !== (data.causes.length === 0)) {
+    throw new TypeError("COMPLETE requires no causes and non-complete evidence requires at least one cause");
+  }
+  assertIdentifier(data.source, "source", { allowUnavailable: true });
+  if (!["PROVIDER_REPORTED", "PROVIDER_CLIENT_REPORTED", "RUNTIME_REPORTED", NOT_AVAILABLE].includes(data.quality)) {
+    throw new TypeError("capacity completeness cannot be estimated");
+  }
+  if (data.status === "COMPLETE" && (data.source === NOT_AVAILABLE || data.quality === NOT_AVAILABLE)) {
+    throw new TypeError("COMPLETE requires observed provenance");
+  }
+}
+
 export function assertLifecycleEvent(event) {
   assertObject(event, "lifecycle event");
   assertExactKeys(event, ["lifecycle_event_version", "event_id", "event_type", "recorded_at", "data"], "lifecycle event");
-  if (event.lifecycle_event_version !== 1) throw new TypeError("lifecycle_event_version must be 1");
+  if (![1, 2].includes(event.lifecycle_event_version)) throw new TypeError("lifecycle_event_version must be 1 or 2");
   assertIdentifier(event.event_id, "event_id");
   if (!LIFECYCLE_EVENT_TYPES.includes(event.event_type)) throw new TypeError("unsupported lifecycle event type");
+  if (event.event_type === "CAPACITY_INTERVAL_EVIDENCE" && event.lifecycle_event_version !== 2) {
+    throw new TypeError("CAPACITY_INTERVAL_EVIDENCE requires lifecycle_event_version 2");
+  }
   timestamp(event.recorded_at, "recorded_at");
   assertObject(event.data, "lifecycle event data");
   const validators = {
@@ -246,6 +302,7 @@ export function assertLifecycleEvent(event) {
     INTERRUPTION: assertInterruption,
     CAPACITY_OBSERVATION: assertObservation,
     CAPACITY_WINDOW: assertWindow,
+    CAPACITY_INTERVAL_EVIDENCE: assertIntervalEvidence,
   };
   validators[event.event_type](event.data);
   return event;
