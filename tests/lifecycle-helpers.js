@@ -97,3 +97,19 @@ export function observationEvent(id, window_id, observed_at, overrides = {}) {
     ...overrides,
   });
 }
+
+export function intervalEvidenceEvent(id, window_id, start_observation_id, end_observation_id, overrides = {}) {
+  const event = lifecycleEvent(`${id}-event`, "CAPACITY_INTERVAL_EVIDENCE", "2030-01-01T02:31:00.000Z", {
+    evidence_id: id,
+    window_id,
+    start_observation_id,
+    end_observation_id,
+    status: "COMPLETE",
+    causes: [],
+    source: "account-activity-ledger",
+    quality: "RUNTIME_REPORTED",
+    ...overrides,
+  });
+  event.lifecycle_event_version = 2;
+  return event;
+}

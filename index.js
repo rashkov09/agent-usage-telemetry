@@ -6,6 +6,8 @@ export { normalizeOpenAIObservation } from "./providers/openai.js";
 export { normalizeAnthropicObservation } from "./providers/anthropic.js";
 export { appendEvent, readEvents } from "./storage/jsonl.js";
 export {
+  CAPACITY_COMPLETENESS_CAUSES,
+  CAPACITY_COMPLETENESS_STATES,
   EVIDENCE_QUALITIES,
   INTERRUPTION_EVENT_CATEGORIES,
   LIFECYCLE_EVENT_TYPES,
