@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Capacity settlement observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["settlement_observation_version", "record_type", "observation_id", "recorded_at", "data"],
+  "properties": {
+    "settlement_observation_version": { "const": 1 },
+    "record_type": { "const": "CAPACITY_SETTLEMENT_OBSERVATION" },
+    "observation_id": { "$ref": "#/$defs/id" },
+    "recorded_at": { "$ref": "#/$defs/timestamp" },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id", "run_id", "session_id", "agent", "provider", "model",
+        "observation_kind", "sequence", "scheduled_delay_seconds", "observed_delay_seconds",
+        "observed_at", "capture_status", "failure_kinds", "windows",
+        "task_attributed_capacity_delta"
+      ],
+      "properties": {
+        "task_id": { "$ref": "#/$defs/id" },
+        "run_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/optionalId" },
+        "agent": { "$ref": "#/$defs/optionalText" },
+        "provider": { "$ref": "#/$defs/optionalText" },
+        "model": { "$ref": "#/$defs/optionalText" },
+        "observation_kind": { "enum": ["IMMEDIATE_AFTER", "SETTLEMENT_OBSERVATION"] },
+        "sequence": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "scheduled_delay_seconds": { "type": "integer", "minimum": 0, "maximum": 300 },
+        "observed_delay_seconds": {
+          "oneOf": [
+            { "type": "integer", "minimum": 0 },
+            { "$ref": "#/$defs/unavailable" }
+          ]
+        },
+        "observed_at": { "$ref": "#/$defs/timestamp" },
+        "capture_status": { "enum": ["AVAILABLE", "NOT_AVAILABLE"] },
+        "failure_kinds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "ENDPOINT_UNAVAILABLE", "TIMEOUT", "AUTH_OR_SCOPE", "RATE_LIMIT",
+              "MALFORMED_RESPONSE", "MISSING_REMAINING_PERCENT", "MISSING_RESET_AT",
+              "PROCESS_EXIT", "GATEWAY_RESTART"
+            ]
+          }
+        },
+        "windows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["window_type", "window_id", "remaining_percent", "reset_at", "source", "quality"],
+            "properties": {
+              "window_type": { "$ref": "#/$defs/text" },
+              "window_id": { "$ref": "#/$defs/optionalId" },
+              "remaining_percent": {
+                "oneOf": [
+                  { "type": "number", "minimum": 0, "maximum": 100 },
+                  { "$ref": "#/$defs/unavailable" }
+                ]
+              },
+              "reset_at": { "$ref": "#/$defs/optionalTimestamp" },
+              "source": { "$ref": "#/$defs/optionalId" },
+              "quality": {
+                "enum": [
+                  "PROVIDER_REPORTED", "PROVIDER_CLIENT_REPORTED",
+                  "RUNTIME_REPORTED", "NOT_AVAILABLE"
+                ]
+              }
+            }
+          }
+        },
+        "task_attributed_capacity_delta": { "$ref": "#/$defs/unavailable" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "observation_kind": { "const": "IMMEDIATE_AFTER" } } },
+          "then": {
+            "properties": {
+              "sequence": { "const": 0 },
+              "scheduled_delay_seconds": { "const": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "observation_kind": { "const": "SETTLEMENT_OBSERVATION" } } },
+          "then": {
+            "properties": {
+              "sequence": { "minimum": 1 },
+              "scheduled_delay_seconds": { "minimum": 1 }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{0,199}$" },
+    "unavailable": { "const": "NOT_AVAILABLE" },
+    "optionalId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "$ref": "#/$defs/unavailable" }] },
+    "text": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\r\\n\\u0000]+$" },
+    "optionalText": { "oneOf": [{ "$ref": "#/$defs/text" }, { "$ref": "#/$defs/unavailable" }] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "optionalTimestamp": { "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "$ref": "#/$defs/unavailable" }] }
+  }
+}

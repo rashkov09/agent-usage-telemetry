@@ -36,3 +36,17 @@ export {
   trainCapacityEstimator,
 } from "./core/calibration.js";
 export { LifecycleStore, appendLifecycleEvent, readLifecycleEvents } from "./storage/lifecycle-jsonl.js";
+export {
+  SETTLEMENT_FAILURE_KINDS,
+  SETTLEMENT_OBSERVATION_KINDS,
+  SettlementCaptureError,
+  assertSettlementObservation,
+  captureSettlementObservation,
+  createImmediateAfterObservationFromTaskRecord,
+  createSettlementObservation,
+  deriveSettlementState,
+} from "./core/settlement.js";
+export {
+  SettlementObservationStore,
+  readSettlementObservations,
+} from "./storage/settlement-jsonl.js";
