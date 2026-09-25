@@ -195,6 +195,47 @@ Useful future calibration requires a capacity observation at task/interval start
 
 The fixtures under `tests/fixtures/` are synthetic and sanitized. They preserve the shapes of a multi-segment implementation interrupted by capacity and an exact-SHA review interrupted by both capacity and no-progress detection; they contain no production records, prompts, account identifiers, local paths, or private source.
 
+### Post-task settlement observations
+
+Provider capacity can update after a task's immediate completion hook. Version 1
+`CAPACITY_SETTLEMENT_OBSERVATION` records preserve that timing without relabeling
+the T+0 snapshot as settled:
+
+- `IMMEDIATE_AFTER` retains the existing task record's `capacity_after` evidence;
+- `SETTLEMENT_OBSERVATION` appends separately timestamped, correlated evidence,
+  normally at bounded sequence points near T+60 and T+180;
+- task/run/session, provider, model, window type and identity, reset timestamp,
+  source, quality, scheduled delay, observed delay, and capture failures remain
+  explicit;
+- unavailable endpoints, timeouts, auth/scope failures, rate limits, malformed
+  responses, missing percentages or reset timestamps, process exits, and Gateway
+  restarts use bounded classifications and never retain raw provider errors;
+- 5-hour and weekly windows are evaluated independently.
+
+`deriveSettlementState(...)` reports `SETTLED` only when the final two
+consecutive delayed observations have exactly identical remaining percentages and
+compatible provider, window type/identity, reset timestamp, source, and quality.
+There is no fuzzy threshold. A reset boundary, an intervening unavailable capture,
+one delayed observation, or a changing final observation remains
+`NOT_AVAILABLE`; every raw observation is retained.
+
+Settlement is observation timing, not task attribution.
+`task_attributed_capacity_delta` therefore remains `NOT_AVAILABLE` unless a
+separate producer can satisfy the existing T3 `COMPLETE` contract. The package
+does not subtract percentages, infer tokens, or reverse-engineer quota formulas.
+
+`SettlementObservationStore` can append its event-shaped records beside
+historical task objects in an existing `records.jsonl`. Historical lines are
+ignored by the settlement reader and are never rewritten. Stable observation IDs
+make exact replay idempotent; sequence slots reject conflicting duplicates, and
+derivation sorts by bounded sequence so out-of-order delivery cannot change the
+result.
+
+The public package exposes `captureSettlementObservation(...)` as the callable
+durable boundary. It deliberately contains no background scheduler. A runtime
+integration must invoke the bounded T+60/T+180 calls and may record
+`PROCESS_EXIT` or `GATEWAY_RESTART` evidence when it can observe those facts.
+
 ## Add another provider
 
 1. Add a module under `providers/` that maps only directly exposed values into `usage`, `capacity`, and `interruptions`.
